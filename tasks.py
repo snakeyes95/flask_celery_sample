@@ -86,7 +86,7 @@ def get_translation_single(srclangcode,trgtlangcode,srctext,id,sentid,callbackur
         fobj.write(srctext)
     with open(id+'output_infer.txt','w',encoding='utf-8') as fobj:
         pass       
-    subprocess.run('python ./OpenNMT-py/translate.py -model ./model/transformer_baseline_model/release_model_1.pt -src ./'+id+'input_infer.txt -output ./'+id+'output_infer.txt -replace_unk -beam_size 5',check=True)
+    subprocess.run('python ./OpenNMT-py/translate.py -model ./model/transformer_baseline_model/English_baseline_51_lkh.pt -src ./'+id+'input_infer.txt -output ./'+id+'output_infer.txt -replace_unk -beam_size 5',check=True)
     with open(id+'output_infer.txt','r',encoding='utf-8') as fobj:
         trgtseg=fobj.readline()
     stop_time=time.time()
