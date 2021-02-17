@@ -10,11 +10,12 @@ from flask_sqlalchemy import SQLAlchemy
 import datetime
 import os
 from flasgger import Swagger
+from celery.result import AsyncResult
 
 #redis://localhost:6379/0
 #sqlite:///data.db
 db=SQLAlchemy()
-app=Celery('tasks',broker='pyamqp://guest@localhost//')
+app=Celery('tasks',broker='pyamqp://guest@localhost//',backend='redis://localhost')
 
 def create_app():
     flask_app=Flask(__name__)
@@ -79,7 +80,7 @@ class BackupModel(db.Model):
  #   db.create_all()
 
 
-@app.task
+@app.task(track_started=True)
 def get_translation_single(srclangcode,trgtlangcode,srctext,id,sentid,callbackurl):
     start_time=time.time()
     with open(id+'input_infer.txt','w',encoding='utf-8')as fobj:
@@ -104,10 +105,7 @@ def get_translation_single(srclangcode,trgtlangcode,srctext,id,sentid,callbackur
     else:
         print(f'{id} file not found')
 
-    return 'get Translation single called'+str(id)+str(srctext)
-
-
-
+    return str(trgtseg)
 
 
 
@@ -197,6 +195,88 @@ class GetSingleTranslation(Resource):
         return {"status":"Request accpeted",
                 "TaskID":str(id),
                 "data":args},202
+
+
+
+
+class GetSingleTranslationPolling(Resource):
+    def post(self):
+        request_parser = reqparse.RequestParser(bundle_errors=True)
+        request_parser.add_argument('SrcLangCode',type=str,required=True,help='Enter Source language code',location='json')
+        request_parser.add_argument('TrgtLangCode',type=str,required=True,help='Enter Target language code',location='json')
+        request_parser.add_argument('SrcSent', type = str, required = True,help = 'No Source text provided', location = 'json')
+        request_parser.add_argument('SentId', type = int, required = True,help = 'Please specify SentId', location = 'json')
+        request_parser.add_argument('CallbackURL', type = str, required = True,help = 'Please specify CallbackURL to recieve response', location = 'json')
+
+        
+        
+        args=request_parser.parse_args()
+        srclangcode=args['SrcLangCode']
+        trgtlangcode=args['TrgtLangCode']
+        sentid=args['SentId']
+        srcsent=args['SrcSent']
+        callback=args['CallbackURL']
+
+        if len(srcsent)==0:
+            return { 'message': "Empty Source string passed" }, 404   
+        if len(srclangcode)==0:
+            return { 'message': "Empty SrcLangCode passed" }, 404   
+        if len(trgtlangcode)==0:
+            return { 'message': "Empty TrgtLangCode passed" }, 404   
+        if sentid == 0:
+            return { 'message': "Invalid SentId passed" }, 404   
+        if len(callback)==0:
+            return { 'message': "Empty CallbackURL string passed" }, 404      
+        
+        id=uuid.uuid1()
+        #req_data=request.get_json()
+        
+        task=get_translation_single.delay(srclangcode,trgtlangcode,str(srcsent),id,sentid,callback)
+        print(task.backend)
+        return {"status":"Request accpeted",
+                "TaskIDDB":str(id),
+                "TaskIDPoll":str(task.id),
+                "data":args},202
+
+class CheckTaskStatus(Resource):
+    def post(self):
+        request_parser = reqparse.RequestParser(bundle_errors=True)
+        request_parser.add_argument('TaskIDPoll',type=str,required=True,help='Enter Task id for long polling',location='json')
+       
+
+        
+        
+        args=request_parser.parse_args()
+        taskIdPoll=args['TaskIDPoll']
+
+        if len(taskIdPoll)==0:
+            return { 'message': "Empty TaskIDPoll string passed" }, 404   
+            
+    
+        status = app.AsyncResult(taskIdPoll, app=app)
+        result =app.AsyncResult(taskIdPoll).result
+        print(status.status)
+        print(result)
+        return {"status":status.state},202
+
+class GetTaskResult(Resource):
+    def post(self):
+        request_parser = reqparse.RequestParser(bundle_errors=True)
+        request_parser.add_argument('TaskIDPoll',type=str,required=True,help='Enter Task id for long polling',location='json')
+    
+        args=request_parser.parse_args()
+        taskIdPoll=args['TaskIDPoll']
+
+        if len(taskIdPoll)==0:
+            return { 'message': "Empty TaskIDPoll string passed" }, 404   
+        result =app.AsyncResult(taskIdPoll).result
+        return {"result":str(result)},202
+
+
+
+
+
+
 
 
 class FetchTranslationByTask(Resource):
@@ -496,6 +576,9 @@ if __name__ == "__main__":
     api=Api(flask_app) 
     swagger = Swagger(flask_app)
     api.add_resource(GetSingleTranslation,'/getsingle')
+    api.add_resource(GetSingleTranslationPolling,'/getsinglepolling')
+    api.add_resource(CheckTaskStatus,'/checkstatuspoll')
+    api.add_resource(GetTaskResult,'/gettaskresult')
     api.add_resource(GetSingleSyncTrans,'/getsinglesync')
     api.add_resource(FetchTranslationByTask,'/fetchtransbyid')
     api.add_resource(GetBulkTranslationSync,'/getbulksync')
